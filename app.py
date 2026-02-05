@@ -111,7 +111,7 @@ def handle_request(payload):
     }
 
 # ---------------- STREAMLIT ENTRY ----------------
-st.set_page_config(pageTitle="Agentic HoneyPot API")
+st.set_page_config(page_title="Agentic HoneyPot API")
 
 params = st.query_params
 
@@ -122,19 +122,15 @@ if "api" in params:
         st.json(response)
     except Exception as e:
         st.json({"error": str(e)})
-
 else:
     st.title("🕵️ Agentic Honey-Pot (Streamlit Public Endpoint)")
-    st.markdown("""
-### API Usage
-
-Example payload:
-```json
-{
+    st.markdown("### API Usage")
+    st.code(
+        '''{
   "conversation_id": "conv_1",
   "message": {
     "text": "Your bank account is blocked. Verify now."
   }
-}
-""")
-
+}''',
+        language="json"
+    )
