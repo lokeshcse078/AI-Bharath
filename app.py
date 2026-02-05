@@ -4,7 +4,7 @@ import time
 import re
 
 # ---------------- CONFIG ----------------
-API_KEY = "AIzaSyCwEro-wQ6YUNcA1E-X-A-M-PL-E"
+API_KEY = "CHANGE_THIS_API_KEY"
 SCAM_THRESHOLD = 0.65
 
 # ---------------- MEMORY ----------------
@@ -28,23 +28,19 @@ def get_memory(conversation_id):
         }
     return st.session_state.MEMORY_STORE[conversation_id]
 
-
 # ---------------- DETECTOR ----------------
 SCAM_KEYWORDS = [
-    "account blocked", "verify", "urgent", "click",
-    "refund", "upi", "bank", "link"
+    "account blocked", "verify", "urgent",
+    "click", "refund", "upi", "bank", "link"
 ]
 
 def detect_scam(text):
     text = text.lower()
     hits = sum(1 for k in SCAM_KEYWORDS if k in text)
     rule_score = hits / len(SCAM_KEYWORDS)
-
     llm_stub_score = 0.9 if "verify" in text else 0.4
     final_score = 0.6 * rule_score + 0.4 * llm_stub_score
-
     return final_score > SCAM_THRESHOLD, round(final_score, 2)
-
 
 # ---------------- EXTRACTION ----------------
 UPI_REGEX = r"[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}"
@@ -57,7 +53,6 @@ def extract_intelligence(text, intel):
     intel["phishing_urls"] += re.findall(URL_REGEX, text)
     intel["ifsc_codes"] += re.findall(IFSC_REGEX, text)
     intel["phone_numbers"] += re.findall(PHONE_REGEX, text)
-
 
 # ---------------- AGENT ----------------
 def generate_agent_reply(memory):
@@ -73,17 +68,13 @@ def generate_agent_reply(memory):
 
     if goal == "extract_link":
         memory["strategy_state"]["next_goal"] = "delay"
-        return "The link didn’t open. Can you send it again?"
+        return "The link didn’t open properly. Can you resend it?"
 
-    return "I’m outside now, will this expire soon?"
-
+    return "I’m currently outside. Will this expire soon?"
 
 # ---------------- API HANDLER ----------------
-def handle_api_request(payload, headers):
+def handle_request(payload):
     start = time.time()
-
-    if headers.get("Authorization") != f"Bearer {API_KEY}":
-        return {"error": "Unauthorized"}, 401
 
     conversation_id = payload["conversation_id"]
     message_text = payload["message"]["text"]
@@ -108,7 +99,7 @@ def handle_api_request(payload, headers):
         "agent_response": {"text": agent_text},
         "engagement_metrics": {
             "conversation_turns": len(memory["turns"]),
-            "engagement_duration_sec": len(memory["turns"]) * 12,
+            "engagement_duration_sec": len(memory["turns"]) * 10,
             "agent_latency_ms": latency
         },
         "extracted_intelligence": memory["extracted_intelligence"],
@@ -117,47 +108,23 @@ def handle_api_request(payload, headers):
                 "intent": "bank_phishing" if scam_detected else "unknown"
             }
         }
-    }, 200
-
+    }
 
 # ---------------- STREAMLIT ENTRY ----------------
-st.set_page_config(page_title="Agentic HoneyPot API", layout="wide")
+st.set_page_config(pageTitle="Agentic HoneyPot API")
 
-query = st.experimental_get_query_params()
+params = st.query_params
 
-if "api" in query:
+if "api" in params:
     try:
-        payload = json.loads(st.experimental_get_query_params().get("payload")[0])
-        headers = {
-            "Authorization": st.experimental_get_query_params().get("auth", [""])[0]
-        }
-
-        response, status = handle_api_request(payload, headers)
+        payload = json.loads(params["payload"])
+        response = handle_request(payload)
         st.json(response)
-
     except Exception as e:
         st.json({"error": str(e)})
 
 else:
-    st.title("🕵️ Agentic Honey-Pot (Streamlit API Mode)")
+    st.title("🕵️ Agentic Honey-Pot (Streamlit Public Endpoint)")
     st.markdown("""
-    ### Public API Endpoint
-    ```
-    POST https://<your-app>.streamlit.app/?api=honeypot
-    ```
-    **Headers**
-    ```
-    Authorization: Bearer <API_KEY>
-    ```
-
-    **Body (JSON)**
-    ```json
-    {
-      "conversation_id": "conv_1",
-      "message": {
-        "text": "Your bank account is blocked, verify now"
-      }
-    }
-    ```
-    """)
+### API Usage
 
