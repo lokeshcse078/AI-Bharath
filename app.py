@@ -122,6 +122,8 @@ if "api" in params:
         st.json(response)
     except Exception as e:
         st.json({"error": str(e)})
+
+    st.stop()   # ⛔ STOP UI FROM RENDERING
 else:
     st.title("🕵️ Agentic Honey-Pot (Streamlit Public Endpoint)")
     st.markdown("### API Usage")
