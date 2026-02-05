@@ -128,3 +128,13 @@ else:
     st.markdown("""
 ### API Usage
 
+Example payload:
+```json
+{
+  "conversation_id": "conv_1",
+  "message": {
+    "text": "Your bank account is blocked. Verify now."
+  }
+}
+""")
+
