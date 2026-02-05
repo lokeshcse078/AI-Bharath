@@ -1,138 +1,104 @@
-import streamlit as st
-import json
-import time
-import re
+import time, re
+from fastapi import FastAPI, Header, HTTPException
+from pydantic import BaseModel
+from typing import List, Optional, Dict
 
-# ---------------- CONFIG ----------------
-API_KEY = "CHANGE_THIS_API_KEY"
+API_KEY = "my_secure_api_key_123"
 SCAM_THRESHOLD = 0.65
 
-# ---------------- MEMORY ----------------
-if "MEMORY_STORE" not in st.session_state:
-    st.session_state.MEMORY_STORE = {}
+app = FastAPI(title="Agentic HoneyPot API")
 
-def get_memory(conversation_id):
-    if conversation_id not in st.session_state.MEMORY_STORE:
-        st.session_state.MEMORY_STORE[conversation_id] = {
+# ---------------- MEMORY ----------------
+MEMORY: Dict[str, dict] = {}
+
+def get_memory(cid):
+    if cid not in MEMORY:
+        MEMORY[cid] = {
             "turns": [],
-            "extracted_intelligence": {
+            "intel": {
                 "upi_ids": [],
                 "bank_accounts": [],
                 "ifsc_codes": [],
                 "phishing_urls": [],
                 "phone_numbers": []
             },
-            "strategy_state": {
-                "next_goal": "extract_bank"
-            }
+            "goal": "extract_bank",
+            "start_time": time.time()
         }
-    return st.session_state.MEMORY_STORE[conversation_id]
+    return MEMORY[cid]
 
-# ---------------- DETECTOR ----------------
-SCAM_KEYWORDS = [
-    "account blocked", "verify", "urgent",
-    "click", "refund", "upi", "bank", "link"
-]
+# ---------------- MODELS ----------------
+class History(BaseModel):
+    sender: str
+    text: str
 
-def detect_scam(text):
-    text = text.lower()
-    hits = sum(1 for k in SCAM_KEYWORDS if k in text)
-    rule_score = hits / len(SCAM_KEYWORDS)
-    llm_stub_score = 0.9 if "verify" in text else 0.4
-    final_score = 0.6 * rule_score + 0.4 * llm_stub_score
-    return final_score > SCAM_THRESHOLD, round(final_score, 2)
+class Message(BaseModel):
+    sender: str
+    text: str
+
+class Payload(BaseModel):
+    conversation_id: str
+    event_id: str
+    timestamp: str
+    message: Message
+    conversation_history: List[History]
+
+# ---------------- SCAM DETECTOR ----------------
+KEYWORDS = ["verify", "account blocked", "urgent", "refund", "upi", "link"]
+
+def detect(text):
+    score = sum(1 for k in KEYWORDS if k in text.lower()) / len(KEYWORDS)
+    return score > SCAM_THRESHOLD, round(score, 2)
 
 # ---------------- EXTRACTION ----------------
-UPI_REGEX = r"[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}"
-URL_REGEX = r"https?://[^\s]+"
-IFSC_REGEX = r"[A-Z]{4}0[A-Z0-9]{6}"
-PHONE_REGEX = r"\b\d{10}\b"
-
-def extract_intelligence(text, intel):
-    intel["upi_ids"] += re.findall(UPI_REGEX, text)
-    intel["phishing_urls"] += re.findall(URL_REGEX, text)
-    intel["ifsc_codes"] += re.findall(IFSC_REGEX, text)
-    intel["phone_numbers"] += re.findall(PHONE_REGEX, text)
+def extract(text, intel):
+    intel["upi_ids"] += re.findall(r"[a-zA-Z0-9.\-_]{2,}@[a-zA-Z]{2,}", text)
+    intel["phishing_urls"] += re.findall(r"https?://\S+", text)
+    intel["ifsc_codes"] += re.findall(r"[A-Z]{4}0[A-Z0-9]{6}", text)
+    intel["phone_numbers"] += re.findall(r"\b\d{10}\b", text)
 
 # ---------------- AGENT ----------------
-def generate_agent_reply(memory):
-    goal = memory["strategy_state"]["next_goal"]
+def agent_reply(mem):
+    if mem["goal"] == "extract_bank":
+        mem["goal"] = "extract_upi"
+        return "I have accounts in two banks. Which one is this for?"
+    if mem["goal"] == "extract_upi":
+        mem["goal"] = "extract_link"
+        return "Will the refund come through UPI?"
+    if mem["goal"] == "extract_link":
+        mem["goal"] = "delay"
+        return "The link isn’t opening properly. Can you resend?"
+    return "I’m outside right now. Will this expire?"
 
-    if goal == "extract_bank":
-        memory["strategy_state"]["next_goal"] = "extract_upi"
-        return "Which bank is this related to? I have two accounts."
+# ---------------- ENDPOINT ----------------
+@app.post("/analyze")
+def analyze(payload: Payload, x_api_key: Optional[str] = Header(None)):
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid API key")
 
-    if goal == "extract_upi":
-        memory["strategy_state"]["next_goal"] = "extract_link"
-        return "The refund will come to my UPI ID right?"
-
-    if goal == "extract_link":
-        memory["strategy_state"]["next_goal"] = "delay"
-        return "The link didn’t open properly. Can you resend it?"
-
-    return "I’m currently outside. Will this expire soon?"
-
-# ---------------- API HANDLER ----------------
-def handle_request(payload):
     start = time.time()
+    mem = get_memory(payload.conversation_id)
 
-    conversation_id = payload["conversation_id"]
-    message_text = payload["message"]["text"]
+    mem["turns"].append(payload.message.text)
 
-    memory = get_memory(conversation_id)
-    memory["turns"].append({"role": "scammer", "text": message_text})
+    scam, confidence = detect(payload.message.text)
 
-    scam_detected, confidence = detect_scam(message_text)
-
-    agent_text = ""
-    if scam_detected:
-        extract_intelligence(message_text, memory["extracted_intelligence"])
-        agent_text = generate_agent_reply(memory)
-        memory["turns"].append({"role": "agent", "text": agent_text})
+    reply = ""
+    if scam:
+        extract(payload.message.text, mem["intel"])
+        reply = agent_reply(mem)
 
     latency = int((time.time() - start) * 1000)
 
     return {
-        "scam_detected": scam_detected,
+        "scam_detected": scam,
         "confidence_score": confidence,
-        "agent_handoff": scam_detected,
-        "agent_response": {"text": agent_text},
+        "agent_handoff": scam,
+        "agent_response": {"text": reply},
         "engagement_metrics": {
-            "conversation_turns": len(memory["turns"]),
-            "engagement_duration_sec": len(memory["turns"]) * 10,
+            "conversation_turns": len(mem["turns"]),
+            "engagement_duration_sec": int(time.time() - mem["start_time"]),
             "agent_latency_ms": latency
         },
-        "extracted_intelligence": memory["extracted_intelligence"],
-        "memory_update": {
-            "scammer_profile": {
-                "intent": "bank_phishing" if scam_detected else "unknown"
-            }
-        }
+        "extracted_intelligence": mem["intel"]
     }
-
-# ---------------- STREAMLIT ENTRY ----------------
-st.set_page_config(page_title="Agentic HoneyPot API")
-
-params = st.query_params
-
-if "api" in params:
-    try:
-        payload = json.loads(params["payload"])
-        response = handle_request(payload)
-        st.json(response)
-    except Exception as e:
-        st.json({"error": str(e)})
-
-    st.stop()   # ⛔ STOP UI FROM RENDERING
-else:
-    st.title("🕵️ Agentic Honey-Pot (Streamlit Public Endpoint)")
-    st.markdown("### API Usage")
-    st.code(
-        '''{
-  "conversation_id": "conv_1",
-  "message": {
-    "text": "Your bank account is blocked. Verify now."
-  }
-}''',
-        language="json"
-    )
